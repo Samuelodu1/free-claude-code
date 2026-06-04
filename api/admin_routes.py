@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import ipaddress
+import base64, os, secrets as _secrets
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -62,15 +63,27 @@ def _origin_is_local(origin: str | None) -> bool:
 
 
 def require_loopback_admin(request: Request) -> None:
-    """Allow admin access only from the local machine."""
-
-    client_host = request.client.host if request.client else None
-    if not _is_loopback_host(client_host):
-        raise HTTPException(status_code=403, detail="Admin UI is local-only")
-
-    origin = request.headers.get("origin")
-    if not _origin_is_local(origin):
-        raise HTTPException(status_code=403, detail="Admin UI is local-only")
+    """Allow admin access with Basic Auth (works locally and remotely)."""
+    admin_user = os.getenv("ADMIN_USER", "admin")
+    admin_pass = os.getenv("ADMIN_PASS", "changeme")
+    auth_header = request.headers.get("authorization", "")
+    try:
+        scheme, credentials = auth_header.split(" ", 1)
+        decoded = base64.b64decode(credentials).decode("utf-8")
+        username, password = decoded.split(":", 1)
+        if not (
+            scheme.lower() == "basic"
+            and _secrets.compare_digest(username, admin_user)
+            and _secrets.compare_digest(password, admin_pass)
+        ):
+            raise ValueError
+    except Exception:
+        from fastapi.responses import Response  # noqa: PLC0415
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": 'Basic realm="Admin"'},
+        )
 
 
 def _asset_response(filename: str) -> FileResponse:
